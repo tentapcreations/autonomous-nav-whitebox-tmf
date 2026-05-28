@@ -22,5 +22,5 @@ This repository is an open invitation. If this resonates with you, join as a col
 * **Phase 3**: Limited Authority Override
 * **Phase 4**: Shared Navigation Authority
 
-Let's give robots back their native tongue — the language of **Traversable Medium**. Step 0 to 1 depends on you!
+Let's give robots back their native tongue 1&0, and what they truely want and need: **Traversable Medium**. Step 0 to 1 depends on you!
 Read the Technical Specification: Check out RFC-001: Bypass Binary Mask Architecture for the detailed Phase 1 engineering blueprint and data flow.
