@@ -1,0 +1,365 @@
+# TMF System Requirements Specification
+## Traversable Medium Framework — Top-Down Design
+
+**Author:** Mingrong Zhao, Tentap Creations  
+**Repository:** tentapc.ca | GitHub  
+**Version:** 0.1 — Conceptual Architecture Draft  
+**Date:** 2026-05-30
+
+---
+
+## 1. System Boundary Statement
+
+TMF is a **decision architecture layer**, not a perception system and not a control system. It sits between perception and vehicle control, doing one thing:
+
+> Compress physical sensor measurements and semantic rule judgments into a single auditable binary execution command.
+
+TMF does not decide where to go. It decides whether the planned next move can be executed now.
+
+---
+
+## 2. Layer 1 — Execution Interface
+
+### What this layer does
+Delivers the final binary decision to the vehicle control system.
+
+### Output
+```
+M_exec ∈ {0, 1}
+
+1 = current planned motion is cleared for execution
+0 = motion command vetoed — trigger braking or replanning
+```
+
+### Input
+```
+M_phys ∈ {0, 1}    ← from Physical Layer
+M_sem  ∈ {0, 1}    ← from Semantic Layer
+```
+
+### Computation
+```
+M_exec = M_phys × M_sem
+```
+
+### Hard Requirements
+| Requirement | Specification |
+|---|---|
+| Latency | Must be below CAN bus response cycle |
+| Determinism | Strictly binary — no probabilistic output permitted |
+| Auditability | Every output must carry timestamp + veto source label (Physical or Semantic) |
+
+---
+
+## 3. Layer 2A — Physical Layer
+
+### What this layer does
+Determines whether the planned motion direction is physically traversable under current kinematic conditions.
+
+### Output
+```
+M_phys ∈ {0, 1}
+
+1 = physically traversable
+0 = physically not traversable
+```
+
+### Input
+```
+V    Dynamic spatio-temporal envelope (computed from current velocity)
+θ    Surface normal angle at traversable medium boundary
+μ    Friction coefficient estimate
+R    Medium resistance normalized value
+```
+
+### Computation Logic
+```
+IF:
+  medium depth > safety distance required by V
+  AND θ < traversability threshold (corrected by μ)
+  AND R < robot capability value C
+THEN: M_phys = 1
+ELSE: M_phys = 0
+```
+
+### Hard Requirements
+| Requirement | Specification |
+|---|---|
+| Semantic isolation | Physical layer accepts zero semantic input |
+| Non-overridable | Semantic layer cannot change M_phys = 0 to 1 |
+| Local execution | Must run on-board in real time — no network dependency |
+| Physics universality | Parameters change per environment; computation structure does not |
+
+---
+
+## 4. Layer 2B — Semantic Layer
+
+### What this layer does
+Determines whether the planned motion direction is permissible under current rules and situational context.
+
+### Output
+```
+M_sem ∈ {0, 1}
+
+1 = semantically permitted
+0 = semantically vetoed
+```
+
+### Input
+```
+Rules      Currently applicable traffic regulations
+Social     Scene social norms (pedestrian zones, school areas, etc.)
+Comfort    Passenger comfort preference parameters
+Context    Scene recognition output (signal state, lane topology, agent intent)
+Mode       Current operating mode (Normal / Emergency / Construction bypass)
+```
+
+### Internal Binary Partition (Critical Design)
+
+**Class 1 signals — collision-risk bearing — NOT relaxable:**
+- Pedestrians actively crossing
+- Vehicles occupying the lane
+- Human safety priority over property safety
+
+**Class 2 signals — regulatory — relaxable under Emergency Mode:**
+- Red lights
+- Double yellow lines
+- Stop lines
+
+### Emergency Mode Computation
+```
+M_emergency = M_phys × M_sem(Class 1 signals only)
+```
+
+### Hard Requirements
+| Requirement | Specification |
+|---|---|
+| Reconfigurability | Class 2 signals can be suspended under defined conditions |
+| Auditability | Every veto must log the specific rule identifier triggered |
+| Updatability | Rule set must support jurisdiction-specific updates |
+| Replaceability | Semantic engine (rule base or LLM) must be replaceable without touching Physical Layer |
+
+---
+
+## 5. Layer 3A — Physical Quantity Acquisition Interface
+
+### What this layer does
+Converts raw sensor data into the four physical input quantities required by the Physical Layer.
+
+### V — Dynamic Spatio-temporal Envelope
+```
+Input:   current velocity, acceleration, defensive driving safety margin
+Output:  3D safety envelope dimensions
+Source:  onboard motion sensors (IMU, wheel odometry)
+```
+
+### θ — Surface Normal Angle
+```
+Input:   LiDAR point cloud
+Output:  surface normal angle per spatial direction
+Method:  point cloud normal estimation (mature, library-ready)
+```
+
+### μ — Friction Coefficient
+```
+Input:   terrain texture analysis + contact history
+Output:  friction coefficient estimate with confidence interval
+Method:  terrain classification (existing solutions reusable)
+Note:    accuracy degrades in extreme weather — confidence tagging required
+```
+
+### R — Medium Resistance
+```
+Input:   FMCW LiDAR continuous wave backscatter signal
+Output:  medium continuity normalized value
+Method:  backscatter intensity discontinuity detection
+Key:     TMF's specific reinterpretation of FMCW output —
+         measures where traversable medium ends,
+         not what object caused it to end
+```
+
+---
+
+## 6. Layer 3B — Semantic Acquisition Interface
+
+### What this layer does
+Converts scene perception results into structured semantic inputs for the Semantic Layer.
+
+### Traffic Rule Input
+```
+Source:  HD map + real-time signal recognition
+Format:  structured rule tags (LLM pre-processing compatible)
+```
+
+### Scene Understanding Input
+```
+Source:  camera + LLM reasoning
+Output:  semantic scene labels
+         - pedestrian position and intent
+         - vehicle trajectory prediction
+         - special zone recognition (school, hospital, construction)
+```
+
+### Risk Source Point Input — Radius-Jump Method
+```
+Source:  LiDAR radial distance discontinuity detection
+Output:  set of risk source point coordinates on traversable medium boundary
+Use:     elevates semantic layer attention weight at potential emergence loci
+         (occlusion corners, parked vehicle edges, building recesses)
+Note:    same signal used in existing literature for negative obstacle detection;
+         TMF reinterprets it as a prior over imminent actor emergence risk
+```
+
+---
+
+## 7. Layer 4 — Sensor Specification Requirements
+
+### Minimum Sensor Set — Physical Layer
+```
+- FMCW LiDAR         (R measurement and radius-jump detection)
+- Standard LiDAR     (θ computation via point cloud normals)
+  or depth camera
+- IMU + wheel odometry  (V dynamic computation)
+```
+
+### Minimum Sensor Set — Semantic Layer
+```
+- RGB camera         (scene semantic recognition)
+- HD map access      (traffic rule localization)
+- Network interface  (LLM semantic API — local deployment optional)
+```
+
+---
+
+## 8. System Requirements Summary
+
+| Layer | Input | Output | Hard Constraint |
+|---|---|---|---|
+| Execution Interface | M_phys, M_sem | M_exec ∈ {0,1} | Real-time, deterministic, logged |
+| Physical Layer | V, θ, μ, R | M_phys ∈ {0,1} | No semantics, non-overridable, local |
+| Semantic Layer | Rules, Context, Mode | M_sem ∈ {0,1} | Reconfigurable, auditable, updatable |
+| Physical Acquisition | Raw sensor data | V, θ, μ, R values | Real-time, confidence-tagged |
+| Semantic Acquisition | Camera + map + LLM | Structured semantic labels | Updatable, replaceable |
+| Sensor Layer | Physical world | Raw data streams | Hardware minimum spec |
+
+---
+
+## 9. How TMF Compresses Complexity
+
+### The core problem with existing systems
+
+Existing autonomous driving architectures handle complexity by mixing it together:
+
+```
+Existing systems:
+Physical judgment + semantic judgment + rule judgment + sensor fusion
+→ all processed inside one network or one computation layer
+→ when something fails, the source cannot be isolated
+→ changing one component risks affecting everything else
+```
+
+### What TMF does differently
+
+TMF does not eliminate complexity. It **assigns complexity to where it belongs.**
+
+```
+TMF:
+Physical complexity  → stays in Physical Layer, resolved by sensors and mechanics
+Semantic complexity  → stays in Semantic Layer, resolved by LLM and rule base
+Between the two      → only one multiplication
+→ when something fails, the layer of origin is immediately identifiable
+→ updating semantic rules does not touch physical judgment
+```
+
+### Specific complexity compressions
+
+| Existing system challenge | TMF resolution |
+|---|---|
+| Sensor conflict arbitration | Dissolved — camera feeds Semantic Layer, LiDAR feeds Physical Layer, they never compete |
+| Long-tail obstacle classification | Physical Layer requires no classification — measures medium boundary only |
+| Rule flexibility vs. safety tension | Physical Layer = hard constraint, Semantic Layer = soft constraint, boundary is explicit |
+| Accident liability attribution | Every veto carries layer-of-origin record — traceable by design |
+
+### The Cantor compression — infinite obstacles to finite physical quantities
+
+Existing systems must enumerate obstacles:
+
+```
+Obstacle set = effectively infinite
+pedestrians, vehicles, cones, cardboard boxes, animals, unknown objects...
+every category requires recognition, classification, modelling
+long-tail scenarios can never be fully enumerated
+```
+
+TMF Physical Layer applies complement-set logic:
+
+```
+Do not enumerate what is inside the obstacle set
+Measure only the boundary of the traversable medium
+Whatever the obstacle is, it is implicitly encoded as the endpoint of the medium
+Infinite obstacle variety → compressed into {V, θ, μ, R}
+```
+
+This compression is computationally real:
+
+**First:** Physical layer computation is lightweight. θ, μ, R, V are continuous physical quantity measurements and comparisons. No neural network required. No training data required. Real-time capable on embedded hardware.
+
+**Second:** Physical layer does not need updating as new obstacle types appear. Obstacle classification systems require continuous retraining as new categories emerge. The mechanics of the Physical Layer are invariant — they work the same on Mars.
+
+**Third:** Physical layer output is already binary. Traditional pipelines require extensive post-processing after perception to reach a decision. Physical Layer outputs 0 or 1 directly. The computation chain is shorter.
+
+### How separation improves Semantic Layer efficiency
+
+**Without separation — Semantic Layer burden:**
+```
+Semantic Layer must simultaneously handle:
+- Can we physically pass here?
+- Should we pass here under current rules?
+- Are sensor readings reliable?
+- How to resolve physical-semantic conflicts?
+→ all questions entangled, mutually interfering
+```
+
+**With separation — Semantic Layer focus:**
+```
+Semantic Layer only handles:
+- Rule judgment for current scene
+- Social norm for current context
+→ physical questions already resolved by Physical Layer
+→ sensor conflicts dissolved at architecture level
+→ Semantic Layer can concentrate on what it does best
+```
+
+Practical efficiency gains:
+
+| Gain | Description |
+|---|---|
+| Independent upgradeability | Traffic law updates, new scene types — update Semantic Layer only |
+| Replaceability | Replace rule base with stronger LLM today — Physical Layer unaffected |
+| Error containment | Semantic Layer errors produce M_sem mistakes, but M_phys remains valid — semantic errors cannot cause physical danger |
+
+---
+
+## 10. One-sentence Value Statement
+
+> Use the certainty of physics to hold the safety boundary.  
+> Use the flexibility of semantics to handle rule complexity.  
+> Between them: only one multiplication.
+
+---
+
+## 11. Implementation Pathways
+
+This specification serves as the shared top-level reference for three implementation approaches developed in this repository:
+
+**Bypass Implementation** — Add TMF as a parallel audit layer alongside existing systems. Lowest engineering risk. Recommended first step.
+
+**Insertion Implementation** — Integrate TMF layers into an existing pipeline at defined interface points.
+
+**Greenfield Implementation** — Build a TMF-native navigation stack from scratch. Most complete. Highest effort.
+
+---
+
+*This document is part of the TMF open repository maintained by Mingrong Zhao, Tentap Creations.*  
+*Contact: contact@tentapc.ca*  
+*© 2026 Tentap Creations. Framework concept by Mingrong Zhao. Document prepared with AI assistance.*
